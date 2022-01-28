@@ -1,0 +1,79 @@
+#!/bin/bash
+
+# bash unofficial strict mode
+# whithout -u to show usage
+set -eo pipefail;
+
+if [[ -z "$2" ]];then
+    echo "Usage: $0 username password [warning days] [critical days]" >&2;
+    exit 1;
+fi
+set -u;
+
+USERNAME="$1";
+PASSWORD="$2";
+WARN_DAYS=${3:-3};
+CRIT_DAYS=${4:-1};
+STATE="ERROR";
+CURRENCY="RUB";
+
+LOGIN_XML="https://office.akado.ru/user/login.xml";
+INFOBLOCK_XML="https://office.akado.ru/information/infoblock.xml";
+DISPLAY_XML="https://office.akado.ru/finance/display.xml";
+TMP_COOKIE_FILE="/tmp/check_akado_cookies_tmp.txt";
+
+# getting cookies and requestID
+AUTH_OUT=$(curl -s -c "$TMP_COOKIE_FILE" -X POST -d "login=$USERNAME&password=$PASSWORD" "$LOGIN_XML");
+REQ_ID_REGEX='requestID=([A-Z0-9\-]+)">';
+    # extracting first group regex match
+if [[ "$AUTH_OUT" =~ $REQ_ID_REGEX ]];then
+    REQ_ID="${BASH_REMATCH[1]}";
+fi
+
+# getting price and balance
+PRICE_AND_BAL_OUT=$(curl -s -b "$TMP_COOKIE_FILE" "$DISPLAY_XML?requestID=$REQ_ID");
+PRICE_REGEX='<expense amount="([0-9]+)"'
+BAL_REGEX='<bill amount="([0-9]+).[0-9]+" description="Текущий баланс"';
+if [[ "$PRICE_AND_BAL_OUT" =~ $PRICE_REGEX ]];then
+    PRICE="${BASH_REMATCH[1]}";
+fi
+if [[ "$PRICE_AND_BAL_OUT" =~ $BAL_REGEX ]];then
+    BALANCE="${BASH_REMATCH[1]}";
+fi
+
+# getting block date
+BLOCKDATE_OUT=$(curl -s -b "$TMP_COOKIE_FILE" "$INFOBLOCK_XML?requestID=$REQ_ID");
+BLOCKDATE_REGEX='<date-to-block amount="([0-9.]+)"';
+if [[ "$BLOCKDATE_OUT" =~ $BLOCKDATE_REGEX ]];then
+    BLOCKDATE="${BASH_REMATCH[1]}";
+fi
+
+# converting blocking date format from '24.01.2020' to '2020-01-24'
+BLOCKDATE=$(awk -F '.' '{print $3, $2, $1}' OFS='-' <<< "$BLOCKDATE");
+
+# calculating date difference
+DAYS_LEFT=$(( ($(date -d "$BLOCKDATE" +%s) - $(date +%s)) / (60 * 60 * 24) + 1 ));
+
+exit_msg() {
+    echo "$STATE: $CREDIT_STATE. $DAYS_LEFT days before invoce appling.";
+    rm "$TMP_COOKIE_FILE";
+}
+trap exit_msg EXIT;
+
+if (( "$PRICE" < "$BALANCE" ));then
+    CREDIT_STATE="Enough money";
+    SATE="OK";
+    exit 0;
+fi
+
+CREDIT_STATE="Need to add $(( "$PRICE" - "$BALANCE" )) $CURRENCY";
+if (( "$DAYS_LEFT" <= "$CRIT_DAYS" ));then
+    STATE="CRITICAL";
+    exit 2;
+elif (( "$DAYS_LEFT" <= "$WARN_DAYS" ));then
+    STATE="WARNING";
+    exit 1;
+else
+    STATE="OK";
+    exit 0;
+fi

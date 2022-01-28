@@ -1,0 +1,35 @@
+#!/bin/bash
+
+# bash unofficial strict mode
+set -euo pipefail;
+
+DOMAIN="$1";
+USERNAME="$2";
+PASSWORD="$3";
+WARN_DAYS="${4:-13}";
+CRIT_DAYS="${5:-3}";
+STATE="ERROR";
+
+API="https://api.reg.ru/api/regru2";
+# API docs: https://www.reg.ru/reseller/api2doc
+
+EXP_DATE=$(curl -s $API'/service/get_info?domain_name='"$DOMAIN"'&username='"$USERNAME"'&password='"$PASSWORD"'&output_content_type=json' | jq -r '.answer.services[].expiration_date');
+
+DAYS_LEFT=$(( ($(date -d "$EXP_DATE" +%s) - $(date +%s)) / (60 * 60 * 24) + 1 ));
+
+exit_msg() {
+    echo "$STATE: domain $DOMAIN will expire in $DAYS_LEFT days";
+}
+
+trap exit_msg EXIT;
+
+if (( "$DAYS_LEFT" <= "$CRIT_DAYS" ));then
+    STATE="CRITICAL";
+    exit 2;
+elif (( "$DAYS_LEFT" <= "$WARN_DAYS" ));then
+    STATE="WARNING";
+    exit 1;
+else
+    STATE="OK";
+    exit 0;
+fi
