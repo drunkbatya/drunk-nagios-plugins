@@ -1,0 +1,165 @@
+#!/bin/bash
+# shellcheck disable=SC2207
+
+# bash unofficial strict mode
+set -euo pipefail;
+
+# public vars
+WARN_DAYS="${1:-7}";
+CRIT_DAYS="${2:-2}";
+
+# private vars
+CERTS="";
+EXITCODE=0;
+CHECK_SSL_CERT="/usr/lib/nagios/plugins/check_ssl_cert";
+
+# help
+if [[ "$WARN_DAYS" == "--help" || "$WARN_DAYS" == "-h" ]];then
+    echo "Usage: sudo $0 [days before warning] [days before critical]";
+    exit 0;
+fi
+
+# root check
+if (( "$EUID" != 0 )); then
+    echo "This script must be run as root";
+    exit 2;
+fi
+
+if [[ ! -x "$CHECK_SSL_CERT" ]];then
+    echo "To check SSL certs this script uses another external script \"check_ssl_cert\"";
+    echo "which isn't found on \"$(dirname $CHECK_SSL_CERT)/\".";
+    echo "Set correct path in this script's variable called \"CHECK_SSL_CERT\"";
+    echo "or download \"check_ssl_cert\" e.g. from it's author's GitHub:";
+    echo "https://raw.githubusercontent.com/matteocorti/check_ssl_cert/master/check_ssl_cert";
+    echo "to \"$(dirname $CHECK_SSL_CERT)/\". Attention: \"check_ssl_cert\" must be executable!";
+    exit 2;
+fi
+
+# we'll have to use temp files to check certs in parallel mode (subshells)
+SCRIPTNAME="$(basename "$0")";
+TMP_DIR="/tmp/$SCRIPTNAME";
+mkdir -p "$TMP_DIR";
+TMP_ERR_FILE="$TMP_DIR/tmp_err_file.txt";
+TMP_CRIT_FILE="$TMP_DIR/tmp_crit_file.txt";
+TMP_WARN_FILE="$TMP_DIR/tmp_warn_file.txt";
+
+# setting new line as array separator
+IFS=$'\n';
+
+# what webservers do we have?
+HTTPD_PS_OUT=( $(pgrep -a "httpd" | grep ".conf" || true) );
+APACHE_PS_OUT=( $(pgrep -a "apache2" || true) );
+NGINX_PS_OUT=( $(pgrep -a "nginx" | grep "master" || true) );
+
+# getting enabled HTTPD configs
+if (( "${#HTTPD_PS_OUT[@]}" ));then
+    HTTPD_CONF_REGEX='.+\ (.+\.conf)'; # regex to catch httpd configs
+    for LINE in "${HTTPD_PS_OUT[@]}";do
+        if [[ "$LINE" =~ $HTTPD_CONF_REGEX ]];then # checking regex match
+                CONFIGS+=( "${BASH_REMATCH[1]}" ); # first regex match in current line
+        fi
+    done
+fi
+
+# getting enabled APACHE2 configs
+if (( "${#APACHE_PS_OUT[@]}" ));then
+    APACHE_CTL_BIN="$(command -v apachectl || true)"; # if we have apachectl instaled
+    if [[ -n "$APACHE_CTL_BIN" ]];then
+        CONFIGS+=( $("$APACHE_CTL_BIN" -t -D DUMP_INCLUDES | awk '{print $2}' | grep ".conf") );
+    fi
+fi
+
+# getting SSL cert list from actual httpd and apache2 configs
+if (( "${#HTTPD_PS_OUT[@]}" )) || (( "${#APACHE_PS_OUT[@]}" ));then
+    CONFIGS=( $(printf "%s\n" "${CONFIGS[@]}" | sort -u) ); # uniquing array
+    for LINE in "${CONFIGS[@]}";do
+        # extracting certs file names from eatch config
+        CERTS+=( $(grep -v "^\ *#" < "$LINE" | grep "SSLCertificateFile" \
+            | awk '{print $2}' | grep -E "\.crt" | sed -E "s/\"|'//g" || true) );
+    done
+fi
+
+# if NGINX
+if (( "${#NGINX_PS_OUT[@]}" ));then
+    # if nginx.. we don't need to jerk off separate config files
+    # we can get current actual config through using "nginx -T".
+    # Using pgrep's output just to get paths of all running nginx bins
+    for LINE in "${NGINX_PS_OUT[@]}";do
+        # /proc/<pid>/exe is a symlink to executable
+        NGINX_BINS+=( $(readlink -f "/proc/$(awk '{print $1}' <<< "$LINE")/exe") );
+    done
+    NGINX_BINS=( $(printf "%s\n" "${NGINX_BINS[@]}" | sort -u) ); # uniquing array
+    for CUR in "${NGINX_BINS[@]}";do
+        # getting ssl certs list from eatch running nginx
+        CERTS+=( $($CUR -T 2>&1 \
+            | grep "ssl_certificate " | grep -v "^\ *#" | awk '{print $2}' \
+            | sort -u | grep -E "\.crt" | sed 's/;//g' || true) );
+    done
+fi
+
+# exiting with ok if no certs found
+if [[ -z "${CERTS[*]}" ]];then
+    echo "OK: no certs found";
+    exit 0;
+fi
+
+CERTS=( $(printf "%s\n" "${CERTS[@]}" | sort -u) ); # final array uniquing
+
+check_cert()
+{
+    # this function will be called from subshells to make check process faster
+    # we need to use temp files because subshells can't modify parrent's vars
+    CERT_FILE_NAME="$1";
+    set +e; # to prevent exiting if check_ssl_cert return non-zero exit code
+    $CHECK_SSL_CERT -w "$WARN_DAYS" -c "$CRIT_DAYS" \
+        -H localhost -f "$CERT_FILE_NAME" > /dev/null 2>&1;
+    CHECK_SSL_EXITCODE="$?";
+    set -e; # make script great again
+    CERTNAME="$(basename "$CERT_FILE_NAME")"; # just filename
+    if (( "$CHECK_SSL_EXITCODE" == 2));then
+        echo "$CERTNAME" >> "$TMP_CRIT_FILE";
+    elif (( "$CHECK_SSL_EXITCODE" == 1 ));then
+        echo "$CERTNAME" >> "$TMP_WARN_FILE";
+    elif (( "$CHECK_SSL_EXITCODE" == 0 ));then
+        return;
+    else
+        echo "$CERTNAME" >> "$TMP_ERR_FILE";
+    fi
+}
+
+# checking all certs in pararell mode
+for CUR in "${CERTS[@]}";do
+    check_cert "$CUR" & # FORK!!
+done
+wait; # waiting all subshells
+
+if [[ -f "$TMP_WARN_FILE" ]];then
+    EXITCODE=1;
+    printf "WARN: ";
+    tr '\n' ' ' < "$TMP_WARN_FILE";
+fi
+if [[ -f "$TMP_CRIT_FILE" ]];then
+    EXITCODE=2;
+    printf "CRIT: ";
+    tr '\n' ' ' < "$TMP_CRIT_FILE";
+fi
+if [[ -f "$TMP_ERR_FILE" ]];then
+    EXITCODE=2;
+    printf "ERR: ";
+    tr '\n' ' ' < "$TMP_ERR_FILE";
+fi
+if (( "$EXITCODE" ));then
+    echo;
+else
+    echo "OK";
+fi
+
+rm -rf "$TMP_DIR";
+exit "$EXITCODE";
+
+################## CONTACT ME ####################
+##     Name:    Max Andreev (DrunkBatya)        ##
+##   Github:    https://github.com/drunkbatya/  ##
+## Telegram:    https://t.me/kernel_panic228    ##
+##       VK:    https://vk.com/drunkbatya/      ##
+################## CONTACT ME ####################
