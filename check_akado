@@ -20,6 +20,7 @@ CURRENCY="RUB";
 LOGIN_XML="https://office.akado.ru/user/login.xml";
 INFOBLOCK_XML="https://office.akado.ru/information/infoblock.xml";
 DISPLAY_XML="https://office.akado.ru/finance/display.xml";
+PROFILE_STATUS_XML="https://office.akado.ru/user/profile-status.xml";
 TMP_COOKIE_FILE="/tmp/check_akado_cookies_tmp.txt";
 
 # getting cookies and requestID
@@ -30,15 +31,11 @@ if [[ "$AUTH_OUT" =~ $REQ_ID_REGEX ]];then
     REQ_ID="${BASH_REMATCH[1]}";
 fi
 
-# getting price and balance
-PRICE_AND_BAL_OUT=$(curl -s -b "$TMP_COOKIE_FILE" "$DISPLAY_XML?requestID=$REQ_ID");
+# getting price
+PRICE_OUT=$(curl -s -b "$TMP_COOKIE_FILE" "$DISPLAY_XML?requestID=$REQ_ID");
 PRICE_REGEX='<expense amount="([0-9]+)"'
-BAL_REGEX='<bill amount="([0-9]+).[0-9]+" description="Текущий баланс"';
-if [[ "$PRICE_AND_BAL_OUT" =~ $PRICE_REGEX ]];then
+if [[ "$PRICE_OUT" =~ $PRICE_REGEX ]];then
     PRICE="${BASH_REMATCH[1]}";
-fi
-if [[ "$PRICE_AND_BAL_OUT" =~ $BAL_REGEX ]];then
-    BALANCE="${BASH_REMATCH[1]}";
 fi
 
 # getting block date
@@ -46,6 +43,13 @@ BLOCKDATE_OUT=$(curl -s -b "$TMP_COOKIE_FILE" "$INFOBLOCK_XML?requestID=$REQ_ID"
 BLOCKDATE_REGEX='<date-to-block amount="([0-9.]+)"';
 if [[ "$BLOCKDATE_OUT" =~ $BLOCKDATE_REGEX ]];then
     BLOCKDATE="${BASH_REMATCH[1]}";
+fi
+
+# getting balance
+BALANCE_OUT=$(curl -s -b "$TMP_COOKIE_FILE" "$PROFILE_STATUS_XML?requestID=$REQ_ID");
+BALANCE_REGEX='balance="([0-9]+)\.[0-9]+"';
+if [[ "$BALANCE_OUT" =~ $BALANCE_REGEX ]];then
+    BALANCE="${BASH_REMATCH[1]}";
 fi
 
 # converting blocking date format from '24.01.2020' to '2020-01-24'
