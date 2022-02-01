@@ -133,20 +133,22 @@ for CUR in "${CERTS[@]}";do
 done
 wait; # waiting all subshells
 
-if [[ -f "$TMP_WARN_FILE" ]];then
-    EXITCODE=1;
-    printf "WARN: ";
-    tr '\n' ' ' < "$TMP_WARN_FILE";
+if [[ -f "$TMP_ERR_FILE" ]];then
+    EXITCODE=2;
+    printf "ERR: ";
+    tr '\n' ' ' < "$TMP_ERR_FILE";
 fi
 if [[ -f "$TMP_CRIT_FILE" ]];then
     EXITCODE=2;
     printf "CRIT: ";
     tr '\n' ' ' < "$TMP_CRIT_FILE";
 fi
-if [[ -f "$TMP_ERR_FILE" ]];then
-    EXITCODE=2;
-    printf "ERR: ";
-    tr '\n' ' ' < "$TMP_ERR_FILE";
+if [[ -f "$TMP_WARN_FILE" ]];then
+    if (( $EXITCODE == 0 ));then
+        EXITCODE=1;
+    fi
+    printf "WARN: ";
+    tr '\n' ' ' < "$TMP_WARN_FILE";
 fi
 if (( "$EXITCODE" ));then
     echo;
