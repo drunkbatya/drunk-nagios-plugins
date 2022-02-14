@@ -39,6 +39,7 @@ fi
 SCRIPTNAME="$(basename "$0")";
 TMP_DIR="/tmp/$SCRIPTNAME";
 mkdir -p "$TMP_DIR";
+/usr/bin/mount -t ramfs ramfs "$TMP_DIR"; # to store temp files into RAM
 TMP_ERR_FILE="$TMP_DIR/tmp_err_file.txt";
 TMP_CRIT_FILE="$TMP_DIR/tmp_crit_file.txt";
 TMP_WARN_FILE="$TMP_DIR/tmp_warn_file.txt";
@@ -156,6 +157,7 @@ else
     echo "OK";
 fi
 
+/usr/bin/umount "$TMP_DIR";
 rm -rf "$TMP_DIR";
 exit "$EXITCODE";
 
