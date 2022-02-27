@@ -4,6 +4,7 @@ This pack consists of:
 1. [check_local_ssl](check_local_ssl) - check all fouded SSL certs on host in paralell mode. 
 2. [check_akado](check_akado) - check [akado ISP](https://www.akado.ru/) balance, price, and blockdate.
 3. [check_regru_domain](check_regru_domain) - check domain expiration date through [reg.ru's api](https://www.reg.ru/reseller/api2doc).
+4. [check_kafka_consumer](check_kafka_consumer) - check a Kafka consumer group using Burrow.
 
 ## check_local_ssl
 This script grab cert's paths from actual Nginx, Apache and Httpd configs. Script will print "OK" and exit with 0 status if no certs found or if no webservers running.
