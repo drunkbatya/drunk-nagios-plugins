@@ -1,0 +1,108 @@
+#!/bin/bash
+
+# bash unofficial strict mode
+set -euo pipefail;
+
+# public
+BURROW_BASE_URL="${1-""}";
+CLUSTER="${2:-""}";
+
+# private
+BASENAME="$(basename "$0")";
+INVALID=();
+ERR=();
+WARN=();
+EXITCODE=0;
+
+if [[ -z "$CLUSTER" ]];then
+    echo "$BASENAME - Monitor a Kafka consumer group using Burrow";
+    echo -e "Usage:\n\t$0 [burrow url] [cluster name]";
+    echo -e "Example:\n\t$0 \"http://127.0.0.1:8880\" \"kafka-bi\"";
+    exit 1;
+fi
+
+# exit if no 'jq' installed
+# "which" output goes from stderr to stdout and then to /dev/null.
+which "jq" > /dev/null 2>&1 \
+    || (echo "This script needs 'jq' to parse JSON, but it isn't found, please install it"; exit 2);
+
+# getting consumer list, parsing JSON via jq
+CONSUMERS=( $(curl -sS -m 5 "$BURROW_BASE_URL/v3/kafka/$CLUSTER/consumer" \
+    | jq '.consumers[]' | tr -d '"') );
+
+# checking all consumers state
+for CUR in "${CONSUMERS[@]}";do
+    OUT="$(curl -sS -m 5 "$BURROW_BASE_URL/v3/kafka/$CLUSTER/consumer/$CUR/status")";
+    STATUS="$(jq '.status.status' <<< "$OUT" | tr -d '"')";
+    if [[ "$STATUS" == "OK" ]];then
+        continue ;
+    fi
+    if [[ "$STATUS" != "ERR" && "$STATUS" != "WARN" ]];then
+        INVALID+=( "$CUR" );
+        continue ;
+    fi
+    # lag for current cusumer
+    TOTAL_LAG="$(jq '.status.totallag' <<< "$OUT" | tr -d '"')";
+    # array with partitions and it's state in format: 0 STOP 1 STOP ..
+    PARTITIONS_STATE=( $(jq '.status.partitions[] | .partition,.status' <<< "$OUT" | tr -d '"') );
+    # elements in array. Equal partitions * 2, because of reason listed above
+    PARTITIONS_COUNT="${#PARTITIONS_STATE[@]}";
+    # string to be displayed after current consumer name and lag
+    PARTITIONS_STRING="";
+    # developing string in format: [part number]=[part state],next.. E.g. 0=STOP,1=STOP,2=STOP etc..
+    for (( COUNT=0; COUNT<"$PARTITIONS_COUNT"; COUNT=$((COUNT+2)) ));do
+        # each n,n+2,n+4.. - part number, each n+1,n+3,n+5.. - it's state
+        PARTITIONS_STRING+="${PARTITIONS_STATE[COUNT]}":${PARTITIONS_STATE[COUNT+1]};
+        # adding comma only of current element isn't last
+        if (( COUNT+2 < PARTITIONS_COUNT ));then
+            PARTITIONS_STRING+=",";
+        fi
+    done
+    # example of view: matomo_events_to_matomo_events_clear(lag=129,partitions=0:STOP,1:STOP,2:STOP,3:STOP)
+    if [[ "$STATUS" == "ERR" ]];then
+        ERR+=( "$CUR(lag=$TOTAL_LAG,partitions=$PARTITIONS_STRING)" );
+    fi
+    if [[ "$STATUS" == "WARN" ]];then
+        WARN+=( "$CUR(lag=$TOTAL_LAG,partitions=$PARTITIONS_STRING)" );
+    fi
+done
+
+if (( "${#INVALID[@]}" != 0 ));then
+    printf "Invalid status: "
+    sed 's/ /, /g' <<< "${INVALID[@]}" | tr -d '\n';
+    EXITCODE=2;
+fi
+if (( "${#ERR[@]}" != 0 ));then
+    # finishing sentence only if previous array is printed
+    if (( EXITCODE == 2 ));then
+        printf ". ";
+    fi
+    printf "ERR: "
+    sed 's/ /, /g' <<< "${ERR[@]}" | tr -d '\n';
+    EXITCODE=2;
+fi
+if (( "${#WARN[@]}" != 0 ));then
+    if (( EXITCODE == 2 ));then
+        printf ". ";
+    else
+        # exitcode may increase only
+        EXITCODE=1;
+    fi
+    printf "WARN: "
+    sed 's/ /, /g' <<< "${WARN[@]}" | tr -d '\n';
+fi
+
+if (( "$EXITCODE" ));then
+    echo;
+else
+    echo "OK";
+fi
+
+exit "$EXITCODE";
+
+################## CONTACT ME ####################
+##     Name:    Max Andreev (DrunkBatya)        ##
+##   Github:    https://github.com/drunkbatya/  ##
+## Telegram:    https://t.me/kernel_panic228    ##
+##       VK:    https://vk.com/drunkbatya/      ##
+################## CONTACT ME ####################
