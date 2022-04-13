@@ -1,0 +1,54 @@
+#!/usr/bin/env python3.6
+
+import sys
+import requests
+import time
+from lxml import etree
+from prometheus_client import start_http_server, Gauge
+
+msgGauge = Gauge('kafka_messages_per_second', 'Messages per second', ['topic'])
+kafkaManagerURL = sys.argv[1]
+httpPort = sys.argv[2]
+requestTimeout = 3
+
+
+def getValuesFromTable(obj):
+    arr = []
+    for cur in obj:
+        if cur.text is not None:
+            arr.append(cur.text)
+        elif cur.find("span") is not None:
+            arr.append(cur.find("span").text)
+        elif cur.find("a") is not None:
+            arr.append(cur.find("a").text)
+        else:
+            arr.append("Empty")
+    return arr
+
+
+def getData(url):
+    string = requests.get(url)
+    table = etree.HTML(string.text).xpath('//*[@id="topics-table"]')[0]
+    thead = table.find("thead")
+    tbody = table.find("tbody")
+    headers = getValuesFromTable(thead[0])
+    return [dict(zip(headers, getValuesFromTable(row))) for row in tbody]
+
+
+def doMeasure(url):
+    for topic in getData(url):
+        msgGauge.labels(topic['Topic']).set(float(topic['Producer Message/Sec']))
+
+
+if __name__ == '__main__':
+    start_http_server(httpPort)
+    while True:
+        doMeasure(kafkaManagerURL)
+        time.sleep(requestTimeout)
+
+################## CONTACT ME ####################
+##     Name:    Max Andreev (DrunkBatya)        ##
+##   Github:    https://github.com/drunkbatya/  ##
+## Telegram:    https://t.me/kernel_panic228    ##
+##       VK:    https://vk.com/drunkbatya/      ##
+################## CONTACT ME ####################

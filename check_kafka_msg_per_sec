@@ -1,0 +1,75 @@
+#!/usr/bin/env python3.6
+
+import sys
+import requests
+from lxml import etree
+
+
+def getValuesFromTable(obj):
+    arr = []
+    for cur in obj:
+        if cur.text is not None:
+            arr.append(cur.text)
+        elif cur.find("span") is not None:
+            arr.append(cur.find("span").text)
+        elif cur.find("a") is not None:
+            arr.append(cur.find("a").text)
+        else:
+            arr.append("Empty")
+    return arr
+
+
+url = sys.argv[1]
+warnMsgTrh = sys.argv[2]
+critMsgTrh = sys.argv[3]
+warnArr = []
+critArr = []
+outWarnArr = []
+outCritArr = []
+exitcode = 0
+
+string = requests.get(url)
+table = etree.HTML(string.text).xpath('//*[@id="topics-table"]')[0]
+thead = table.find("thead")
+tbody = table.find("tbody")
+
+headers = getValuesFromTable(thead[0])
+topics = [dict(zip(headers, getValuesFromTable(row))) for row in tbody]
+
+for topic in topics:
+    if (float(topic['Producer Message/Sec']) > float(critMsgTrh)):
+        critArr.append(topic)
+    elif (float(topic['Producer Message/Sec']) > float(warnMsgTrh)):
+        warnArr.append(topic)
+
+for topic in critArr:
+    outCritArr.append(("{}({}/sec)".
+                       format(topic['Topic'], topic['Producer Message/Sec'])))
+for topic in warnArr:
+    outWarnArr.append(("{}({}/sec)".
+                       format(topic['Topic'], topic['Producer Message/Sec'])))
+
+if len(critArr):
+    if len(warnArr):
+        print("Critical: {}".format(outCritArr), end='. ')
+    else:
+        print("Critical: {}".format(outCritArr))
+    exitcode = 2
+
+if len(warnArr):
+    print("Warning: {}".format(outWarnArr))
+    if (exitcode < 1):
+        exitcode = 1
+
+if len(critArr) == 0 and len(warnArr) == 0:
+    print("OK")
+    exitcode = 0
+
+exit(exitcode)
+
+################## CONTACT ME ####################
+##     Name:    Max Andreev (DrunkBatya)        ##
+##   Github:    https://github.com/drunkbatya/  ##
+## Telegram:    https://t.me/kernel_panic228    ##
+##       VK:    https://vk.com/drunkbatya/      ##
+################## CONTACT ME ####################
